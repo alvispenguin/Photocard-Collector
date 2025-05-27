@@ -1,17 +1,14 @@
 package com.example.photocardcollector
 
-import android.app.Activity
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
-import android.provider.MediaStore
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.Manifest
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -20,16 +17,24 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.icu.text.SimpleDateFormat
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.core.content.FileProvider
 import java.io.File
 import java.util.Date
+import androidx.core.graphics.scale
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.get
 
 class AddFragment : Fragment() {
     private lateinit var photoFile: File
-    private val CAMERA_REQUEST_CODE = 1000
+
+    private val requestPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
+    private val takePictureLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) {
+        ret -> if (ret) onPhotoToken()
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -46,7 +51,7 @@ class AddFragment : Fragment() {
             if (checkCameraPermission()) {
                 openCamera()
             } else {
-                requestCameraPermission()
+                requestPermissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
             }
         }
     }
@@ -58,28 +63,20 @@ class AddFragment : Fragment() {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun requestCameraPermission() {
-        requestPermissions(
-            arrayOf(Manifest.permission.CAMERA),
-            CAMERA_REQUEST_CODE
-        )
-    }
-
     private fun openCamera() {
-        Intent(MediaStore.ACTION_IMAGE_CAPTURE).also { intent ->
-            intent.resolveActivity(requireActivity().packageManager)?.also {
-                photoFile = createImageFile()
-                photoFile.also {
-                    val photoURI: Uri = FileProvider.getUriForFile(
-                        requireContext(),
-                        "${requireContext().packageName}.provider",
-                        it
-                    )
-                    intent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI)
-                    startActivityForResult(intent, CAMERA_REQUEST_CODE)
+        println("[${this::class.simpleName}.${this::openCamera.name}]")
+        startActivity(Intent(context, ActivityTakePicture::class.java))
+        return
+
+        takePictureLauncher.launch(
+            FileProvider.getUriForFile(
+                requireContext(),
+                "${requireContext().packageName}.provider",
+                createImageFile().also {
+                    photoFile = it
                 }
-            }
-        }
+            )
+        )
     }
 
     private fun createImageFile(): File {
@@ -98,14 +95,11 @@ class AddFragment : Fragment() {
         )
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (requestCode == CAMERA_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
-            if (!isPhotoDuplicate()) {
-                showAddPhotoDialog()
-            }
-            else{
-                Toast.makeText(context, "Already Existed", Toast.LENGTH_SHORT).show()
-            }
+    private fun onPhotoToken () {
+        if (!isPhotoDuplicate()) {
+            showAddPhotoDialog()
+        } else {
+            Toast.makeText(context, "Already Existed", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -143,7 +137,7 @@ class AddFragment : Fragment() {
         photoFile.copyTo(destination, true)
     }
 
-    class Phash(
+    private class Phash(
         fileOnePath: String?,
         fileTwoPath: String?,
         bitSize: Int = 8
@@ -168,9 +162,7 @@ class AddFragment : Fragment() {
             hDistance = getHammingDistance(hashOne.toString(), hashTwo.toString())
         }
 
-        fun getSimilarityScore(): Int {
-            return 100 - hDistance
-        }
+        fun getSimilarityScore(): Int = 100 - hDistance
 
         private fun getHammingDistance(one: String, two: String): Int {
             if (one.length != two.length) {
@@ -183,15 +175,13 @@ class AddFragment : Fragment() {
             return counter
         }
 
-        private fun resizeToNxN(filePath: String?, N: Int): Bitmap? {
-            val originalBitmap = BitmapFactory.decodeFile(filePath) ?: return null
-            return Bitmap.createScaledBitmap(originalBitmap, N, N, true)
-        }
+        private fun resizeToNxN(filePath: String?, n: Int): Bitmap? =
+            BitmapFactory.decodeFile(filePath)?.scale(n, n)
 
-        private fun toGreyscale(bmpOriginal: Bitmap): Bitmap? {
+        private fun toGreyscale(bmpOriginal: Bitmap): Bitmap {
             val height: Int = bmpOriginal.height
             val width: Int = bmpOriginal.width
-            val bmpGrayscale = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val bmpGrayscale = createBitmap(width, height)
             val canvas = Canvas(bmpGrayscale)
             val ma = ColorMatrix()
             ma.setSaturation(0f)
@@ -207,7 +197,7 @@ class AddFragment : Fragment() {
             var totalPixVal = 0
             for (i in 0 until myWidth) {
                 for (j in 0 until myHeight) {
-                    val currPixel = grayscaleBitmap.getPixel(i, j) and 0xff //read lowest byte of pixels
+                    val currPixel = grayscaleBitmap[i, j] and 0xff //read lowest byte of pixels
                     totalPixVal += currPixel
                 }
             }
@@ -215,7 +205,7 @@ class AddFragment : Fragment() {
             var hashVal = ""
             for (i in 0 until myWidth) {
                 for (j in 0 until myHeight) {
-                    val currPixel = grayscaleBitmap.getPixel(i, j) and 0xff //read lowest byte of pixels
+                    val currPixel = grayscaleBitmap[i, j] and 0xff //read lowest byte of pixels
                     hashVal += if (currPixel >= average) {
                         "1"
                     } else {
