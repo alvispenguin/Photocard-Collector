@@ -8,6 +8,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.Manifest
+import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -16,7 +18,10 @@ import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.icu.text.SimpleDateFormat
+import android.net.Uri
+import android.provider.MediaStore
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
@@ -27,14 +32,14 @@ import java.util.Date
 import androidx.core.graphics.scale
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.get
+import androidx.core.net.toFile
+import androidx.core.net.toUri
 
 class AddFragment : Fragment() {
-    private lateinit var photoFile: File
+    private lateinit var tmpImageUri: Uri
 
     private val requestPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
-    private val takePictureLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) {
-        ret -> if (ret) onPhotoToken()
-    }
+    private val takeAndCropPictureLauncher = registerForActivityResult(TakeAndCropPicture()) { onPhotoToken() }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -49,7 +54,11 @@ class AddFragment : Fragment() {
 
         view.findViewById<ImageView>(R.id.add_button).setOnClickListener {
             if (checkCameraPermission()) {
-                openCamera()
+                takeAndCropPictureLauncher.launch(
+                    createTmpImageFile().also {
+                        tmpImageUri = it
+                    }
+                )
             } else {
                 requestPermissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
             }
@@ -63,36 +72,14 @@ class AddFragment : Fragment() {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun openCamera() {
-        println("[${this::class.simpleName}.${this::openCamera.name}]")
-        startActivity(Intent(context, ActivityTakePicture::class.java))
-        return
-
-        takePictureLauncher.launch(
-            FileProvider.getUriForFile(
-                requireContext(),
-                "${requireContext().packageName}.provider",
-                createImageFile().also {
-                    photoFile = it
-                }
-            )
-        )
-    }
-
-    private fun createImageFile(): File {
-        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss").format(Date())
-        val storageDir = File(
-            requireContext().getExternalFilesDir(Environment.DIRECTORY_PICTURES),
-            "MyCards"
-        )
-        if (!storageDir.exists()) {
-            storageDir.mkdirs()
+    private fun createTmpImageFile(): Uri {
+        val folder = requireContext().getExternalFilesDir(Environment.DIRECTORY_PICTURES)!!
+        if (!folder.exists()) {
+            folder.mkdirs()
         }
-        return File.createTempFile(
-            "JPEG_${timeStamp}_",
-            ".jpg",
-            storageDir
-        )
+        return File(folder, "tmp.jpg").also {
+            it.createNewFile()
+        }.toUri()
     }
 
     private fun onPhotoToken () {
@@ -106,7 +93,7 @@ class AddFragment : Fragment() {
     private fun isPhotoDuplicate(): Boolean {
         val storedFolder = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "MyCards")
         return storedFolder.listFiles()?.any{
-            val similarity = Phash(photoFile.path, it.path).getSimilarityScore()
+            val similarity = Phash(tmpImageUri.toFile().path, it.path).getSimilarityScore()
             println("compare to ${it.path}, similarity: $similarity")
             similarity > 80
         }?:false
@@ -123,18 +110,29 @@ class AddFragment : Fragment() {
     }
 
     private fun savePhoto() {
-        val folder=File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),"MyCards")
+        val folder = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "MyCards")
         if(!folder.exists()){
             folder.mkdirs()
         }
-        val destination = File(
-            folder,
-            photoFile.name
-        )
+
+        val destination = File(folder, "${System.currentTimeMillis()}.jpg")
         if(!destination.exists()){
             destination.createNewFile()
         }
-        photoFile.copyTo(destination, true)
+        tmpImageUri.toFile().run {
+            copyTo(destination, true)
+            delete()
+        }
+    }
+
+    private class TakeAndCropPicture: ActivityResultContract<Uri, Boolean>() {
+        override fun createIntent(context: Context, input: Uri): Intent {
+            return Intent(context, ActivityTakePicture::class.java).
+                putExtra(MediaStore.EXTRA_OUTPUT, input)
+        }
+        override fun parseResult(resultCode: Int, intent: Intent?): Boolean {
+            return resultCode == Activity.RESULT_OK
+        }
     }
 
     private class Phash(

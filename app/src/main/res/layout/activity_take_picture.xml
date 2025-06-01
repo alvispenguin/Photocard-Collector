@@ -11,12 +11,21 @@
         android:id="@+id/camera_wrapper"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1">
+        android:layout_weight="1"
+        android:background="@color/black">
 
         <androidx.camera.view.PreviewView
             android:id="@+id/preview_view"
             android:layout_width="match_parent"
             android:layout_height="match_parent"/>
+
+        <include
+            layout="@layout/component_progress"
+            android:id="@+id/progress"
+            android:visibility="gone"
+            android:layout_height="wrap_content"
+            android:layout_width="wrap_content"
+            android:layout_centerInParent="true"/>
 
     </RelativeLayout>
 
@@ -30,13 +39,13 @@
             android:id="@+id/back_button"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="back"/>
+            android:text="@string/back"/>
 
         <Button
             android:id="@+id/capture_button"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="capture"/>
+            android:text="@string/capture"/>
 
     </LinearLayout>
 
