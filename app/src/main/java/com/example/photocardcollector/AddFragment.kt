@@ -17,7 +17,6 @@ import android.graphics.Canvas
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
-import android.icu.text.SimpleDateFormat
 import android.net.Uri
 import android.provider.MediaStore
 import android.widget.Toast
@@ -26,9 +25,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
-import androidx.core.content.FileProvider
 import java.io.File
-import java.util.Date
 import androidx.core.graphics.scale
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.get
@@ -36,6 +33,12 @@ import androidx.core.net.toFile
 import androidx.core.net.toUri
 
 class AddFragment : Fragment() {
+    companion object {
+        // a double in range 0.0 to 100.0
+        // photo is duplicated if its similarity score is larger than this threshold
+        private val SIMILARITY_THRESHOLD = 80
+    }
+
     private lateinit var tmpImageUri: Uri
 
     private val requestPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
@@ -93,9 +96,9 @@ class AddFragment : Fragment() {
     private fun isPhotoDuplicate(): Boolean {
         val storedFolder = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "MyCards")
         return storedFolder.listFiles()?.any{
-            val similarity = Phash(tmpImageUri.toFile().path, it.path).getSimilarityScore()
+            val similarity = Phash(tmpImageUri.toFile().path, it.path).similarityScore
             println("compare to ${it.path}, similarity: $similarity")
-            similarity > 80
+            similarity > SIMILARITY_THRESHOLD
         }?:false
     }
 
@@ -135,36 +138,26 @@ class AddFragment : Fragment() {
         }
     }
 
-    private class Phash(
-        fileOnePath: String?,
-        fileTwoPath: String?,
-        bitSize: Int = 8
-    ) {
-        private var bitMapOne: Bitmap? = null
-        private var bitMapTwo: Bitmap? = null
-        private var hashOne: String? = null
-        private var hashTwo: String? = null
-        private var hDistance: Int = 101
-
-        init {
-            // First we are converting our image to 8x8 bits
-            bitMapOne = resizeToNxN(fileOnePath, bitSize)
-            bitMapTwo = resizeToNxN(fileTwoPath, bitSize)
-            // Then converting bitmap to grayscale
-            bitMapOne = bitMapOne?.let { toGreyscale(it) }
-            bitMapTwo = bitMapTwo?.let { toGreyscale(it) }
-            // Getting the hash from the images
-            hashOne = bitMapOne?.let { buildHash(it) }
-            hashTwo = bitMapTwo?.let { buildHash(it) }
-            // Finally getting hamming distance
-            hDistance = getHammingDistance(hashOne.toString(), hashTwo.toString())
+    private class Phash (pathA: String, pathB: String) {
+        companion object {
+            private const val N = 8
+            private const val NxN = N * N
         }
 
-        fun getSimilarityScore(): Int = 100 - hDistance
+        private var hDistance: Int = -1
+
+        init {
+            val bitMapA = toGreyscale(resizeToNxN(pathA))
+            val bitMapB = toGreyscale(resizeToNxN(pathB))
+            hDistance = getHammingDistance(buildHash(bitMapA), buildHash(bitMapB))
+        }
+
+        val similarityScore: Double
+            get() = (NxN - hDistance) / NxN.toDouble()
 
         private fun getHammingDistance(one: String, two: String): Int {
             if (one.length != two.length) {
-                return -1
+                throw Exception("the length of hash string is different")
             }
             var counter = 0
             for (i in one.indices) {
@@ -173,18 +166,22 @@ class AddFragment : Fragment() {
             return counter
         }
 
-        private fun resizeToNxN(filePath: String?, n: Int): Bitmap? =
-            BitmapFactory.decodeFile(filePath)?.scale(n, n)
+        private fun resizeToNxN(filePath: String): Bitmap =
+            BitmapFactory.decodeFile(filePath).scale(N, N)
 
         private fun toGreyscale(bmpOriginal: Bitmap): Bitmap {
             val height: Int = bmpOriginal.height
             val width: Int = bmpOriginal.width
             val bmpGrayscale = createBitmap(width, height)
             val canvas = Canvas(bmpGrayscale)
-            val ma = ColorMatrix()
-            ma.setSaturation(0f)
-            val paint = Paint()
-            paint.colorFilter = ColorMatrixColorFilter(ma)
+
+            val paint = Paint().apply {
+                val ma = ColorMatrix().apply {
+                    setSaturation(0f)
+                }
+                colorFilter = ColorMatrixColorFilter(ma)
+            }
+
             canvas.drawBitmap(bmpOriginal, 0f, 0f, paint)
             return bmpGrayscale
         }
@@ -192,6 +189,7 @@ class AddFragment : Fragment() {
         private fun buildHash(grayscaleBitmap: Bitmap): String {
             val myHeight = grayscaleBitmap.height
             val myWidth = grayscaleBitmap.width
+
             var totalPixVal = 0
             for (i in 0 until myWidth) {
                 for (j in 0 until myHeight) {
@@ -199,16 +197,13 @@ class AddFragment : Fragment() {
                     totalPixVal += currPixel
                 }
             }
-            val average = totalPixVal / 64
+
+            val average = totalPixVal / (myHeight * myWidth)
             var hashVal = ""
             for (i in 0 until myWidth) {
                 for (j in 0 until myHeight) {
                     val currPixel = grayscaleBitmap[i, j] and 0xff //read lowest byte of pixels
-                    hashVal += if (currPixel >= average) {
-                        "1"
-                    } else {
-                        "0"
-                    }
+                    hashVal += if (currPixel >= average) "1" else "0"
                 }
             }
             return hashVal
